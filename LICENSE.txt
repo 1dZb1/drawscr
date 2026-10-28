@@ -1,0 +1,61 @@
+Drawscr License 1.0
+
+Copyright (c) 2026 Denis Rychkovskiy (DZRobo)
+Project credit: by DZRobo&SI
+Project website: https://dzrobo.com/
+
+1. Software
+
+"Software" means Drawscr, its source code, executable files and accompanying
+project files. "Modified Version" means the Software with changes made by you
+or another person.
+
+2. Use and modification
+
+You may use, copy, run, study and modify the Software free of charge for any
+purpose, including personal, business, workplace and freelance activities.
+Using the Software in paid work does not by itself require separate permission.
+
+3. Free standalone distribution
+
+You may distribute the Software and Modified Versions as standalone copies,
+without charge, in source or executable form, provided that you:
+
+  a. include this License in full and retain the copyright notice and the
+     project website listed above;
+  b. clearly identify a Modified Version as modified; and
+  c. distribute it under these same terms, including the restrictions below.
+
+You are not required to publish source code merely because you distribute an
+executable. A standalone copy is not embedded in or integrated into another
+product.
+
+4. Activities requiring written permission
+
+You must obtain prior written permission from Denis Rychkovskiy (DZRobo) to:
+
+  a. sell, license for a fee, or otherwise charge for providing the Software
+     or a Modified Version; or
+  b. embed or integrate the Software or a Modified Version into another
+     product, whether that product is free or paid.
+
+Charging for unrelated work or services, while using the Software as a tool,
+does not by itself constitute charging for the Software. For permission,
+contact the copyright holder through https://dzrobo.com/.
+
+5. Images and recordings
+
+This License places no restrictions on images, GIFs or other output created
+using the Software, including their commercial use. Rights of other parties
+and applicable law may still apply to that output. Using such output in
+another product does not by itself integrate the Software into that product.
+
+6. No warranty or liability
+
+To the extent permitted by applicable law, the Software is provided "AS IS",
+without warranty of any kind, express or implied, including warranties of
+merchantability, fitness for a particular purpose and non-infringement.
+To the extent permitted by applicable law, the copyright holder is not liable
+for any claim, damages or other liability arising from the Software or its use,
+whether in contract, tort or otherwise, even if advised of the possibility of
+such damages.
