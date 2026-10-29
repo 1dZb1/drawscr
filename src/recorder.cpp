@@ -1,6 +1,7 @@
 #include "recorder.h"
 #include "gif_encoder.h"
 #include "palette.h"
+#include "temporal_palette.h"
 #include <objbase.h>
 #include <algorithm>
 #include <array>
@@ -177,6 +178,7 @@ bool recover_raw(const std::wstring& raw_path, const std::wstring& gif_path, std
         error = cancelled(stop) ? L"Recording cancelled." : L"Could not create the GIF palette.";
         return false;
     }
+    const bool preserve_exact_source = plan.exact_colors;
     if (compression == GifCompression::Strong || compression == GifCompression::Quality) {
         bool useful = !(compression == GifCompression::Strong && plan.colors.size() <= 128) &&
                       !(compression == GifCompression::Quality && plan.exact_colors);
@@ -212,7 +214,7 @@ bool recover_raw(const std::wstring& raw_path, const std::wstring& gif_path, std
                   error, stop))
         return false;
     _fseeki64(raw.get(), sizeof(h), SEEK_SET);
-    std::vector<BYTE> previous(count);
+    std::vector<BYTE> previous(count), previous_source_features;
     uint64_t previous_time = 0;
     for (uint64_t j = 0; j < frames; ++j) {
         if (cancelled(stop)) {
@@ -233,6 +235,18 @@ bool recover_raw(const std::wstring& raw_path, const std::wstring& gif_path, std
             if (!gif.add(previous, duration, error))
                 return false;
         }
+        // Preserve source strokes in both frames. Caching the SOURCE mask
+        // avoids treating texture introduced by quantization as a new feature.
+        std::vector<BYTE> current_features;
+        if (!preserve_exact_source) {
+            current_features = temporal_feature_mask(h.width, h.height, [&](size_t k) {
+                return bgra_color(frame.data() + k * 4);
+            }, stop);
+            if (current_features.size() != count || (j && previous_source_features.size() != count)) {
+                error = L"Recording cancelled.";
+                return false;
+            }
+        }
         for (size_t i = 0; i < count; ++i) {
             if ((i & 65535) == 0 && cancelled(stop)) {
                 error = L"Recording cancelled.";
@@ -243,8 +257,22 @@ bool recover_raw(const std::wstring& raw_path, const std::wstring& gif_path, std
                 error = L"Recording data changed during encoding.";
                 return false;
             }
+            if (j && !preserve_exact_source && index != previous[i]) {
+                const unsigned tolerance = compression == GifCompression::Quality ? 9u
+                                             : compression == GifCompression::Strong ? 24u : 20u;
+                const unsigned edge_tolerance = compression == GifCompression::Quality ? 4u
+                                                  : compression == GifCompression::Strong ? 10u : 8u;
+                const unsigned budget = temporal_edge(frame.data(), i, h.width, h.height)
+                                            ? edge_tolerance : tolerance;
+                const unsigned source = bgra_color(frame.data() + i * 4);
+                const unsigned current = plan.colors[static_cast<size_t>(index)];
+                if (!current_features[i] && !previous_source_features[i] &&
+                    retain_palette_color(source, current, plan.colors[previous[i]], budget))
+                    index = previous[i];
+            }
             previous[i] = static_cast<BYTE>(index);
         }
+        previous_source_features = std::move(current_features);
         previous_time = timestamp;
     }
     uint64_t final_duration =

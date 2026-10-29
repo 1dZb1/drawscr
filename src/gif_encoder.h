@@ -1,5 +1,4 @@
 #pragma once
-#include <windows.h>
 #include <memory>
 #include <atomic>
 #include <cstdint>

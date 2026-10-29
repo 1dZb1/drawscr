@@ -1,5 +1,6 @@
 #pragma once
 #include "canvas.h"
+#include "capture_timing.h"
 #include "toolbar.h"
 #include "recorder.h"
 #include "record_ui.h"
@@ -13,7 +14,7 @@ namespace drawscr {
 constexpr UINT WM_DRAW_END = WM_APP + 20;
 class Session {
   public:
-    explicit Session(HWND owner, std::wstring ini = {});
+    explicit Session(HWND owner, std::wstring ini = {}, ULONGLONG capture_started = 0);
     ~Session();
     bool begin(bool whole_monitor = false);
     void command(Command command);
@@ -98,6 +99,7 @@ class Session {
     std::unique_ptr<TextEditor> text_editor_;
     TextTransaction text_transaction_;
     std::wstring ini_;
+    CaptureTiming capture_timing_;
     bool allow_unpersisted_size_ = false;
     CanvasState canvas_;
     RECT record_rect_{};

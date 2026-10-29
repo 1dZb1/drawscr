@@ -3,6 +3,7 @@
 #include "theme.h"
 #include "website.h"
 #include "tooltips.h"
+#include "ui_type.h"
 #include "shortcut_ui.h"
 #include "preferences.h"
 #include "launcher_view.h"
@@ -15,6 +16,7 @@
 #include <algorithm>
 #include <memory>
 #include <string>
+#include <thread>
 using namespace Gdiplus;
 using namespace drawscr;
 
@@ -37,6 +39,7 @@ class App;
 
 class App {
   public:
+    ~App() { if (font_warmup_.joinable()) font_warmup_.join(); }
     bool create(HINSTANCE instance, bool quiet);
     int run();
     BindError change_trigger(const Trigger& trigger);
@@ -57,6 +60,7 @@ class App {
     static bool trigger_allowed(void* context);
     void fire_trigger();
     std::wstring shortcut_name() const;
+    std::thread font_warmup_;
     HINSTANCE instance_ = nullptr;
     HWND hwnd_ = nullptr;
     HICON icon_ = nullptr, tray_icon_ = nullptr;
@@ -92,6 +96,21 @@ bool App::create(HINSTANCE instance, bool quiet) {
         mutex_ = nullptr;
         return false;
     }
+    // Quiet startup can defer first GDI+ font use until the first hotkey.
+    // Warm only private offscreen objects; never capture the user's screen here.
+    try {
+        font_warmup_ = std::thread([] {
+            try {
+                Bitmap bitmap(32, 24, PixelFormat32bppARGB);
+                Graphics graphics(&bitmap);
+                UiTypeface family;
+                Font font(family.medium(), 12, family.medium_style(), UnitPixel);
+                SolidBrush ink(Color(255, 255, 255, 255));
+                graphics.DrawString(L"Aa", -1, &font, PointF(0, 0), &ink);
+                graphics.Flush();
+            } catch (...) { /* Optional warmup must not terminate the application. */ }
+        });
+    } catch (...) { /* Capture still works if optional warmup cannot start. */ }
     set_current_theme(load_theme(ini_));
     startup_ = std::make_unique<RegistryStartupStore>(path);
     icon_ = load_app_icon(instance_, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON));
@@ -282,13 +301,15 @@ void App::menu() {
     PostMessageW(hwnd_, WM_NULL, 0, 0);
 }
 void App::capture(bool whole) {
+    const ULONGLONG capture_started = GetTickCount64();
     if (session_)
         return;
     if (settings_window_)
         SendMessageW(settings_window_, WM_CLOSE, 0, 0);
+    tips_.pop();
     ShowWindow(hwnd_, SW_HIDE);
-    DwmFlush();
-    session_ = std::make_unique<Session>(hwnd_, ini_);
+    // Session performs the single compositor synchronization after all hides.
+    session_ = std::make_unique<Session>(hwnd_, ini_, capture_started);
     if (!session_->begin(whole)) {
         session_.reset();
         show();
@@ -591,8 +612,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
     if (argv)
         LocalFree(argv);
 
-    App app;
-    int result = app.create(instance, quiet) ? app.run() : 0;
+    int result = 0;
+    {
+        App app;
+        result = app.create(instance, quiet) ? app.run() : 0;
+    } // Join font warmup and destroy all GDI+ owners before shutdown.
     GdiplusShutdown(gdiplus);
     if (SUCCEEDED(hr))
         CoUninitialize();

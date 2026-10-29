@@ -12,7 +12,8 @@ using namespace Gdiplus;
 namespace drawscr {
 static constexpr wchar_t overlay_class[] = L"Drawscr.Overlay";
 Session* Session::active_ = nullptr;
-Session::Session(HWND owner, std::wstring ini) : owner_(owner), ini_(std::move(ini)) {}
+Session::Session(HWND owner, std::wstring ini, ULONGLONG capture_started)
+    : owner_(owner), ini_(std::move(ini)), capture_timing_(capture_started) {}
 Session::~Session() {
     if (hwnd_) {
         KillTimer(hwnd_, 42);
@@ -31,13 +32,18 @@ Session::~Session() {
 }
 
 bool Session::begin(bool whole_monitor) {
+    capture_timing_.mark("begin");
     RECT bounds{GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN), 0, 0};
     bounds.right = bounds.left + GetSystemMetrics(SM_CXVIRTUALSCREEN);
     bounds.bottom = bounds.top + GetSystemMetrics(SM_CYVIRTUALSCREEN);
     canvas_.reset(bounds);
+    capture_timing_.mark("before_compositor_flush");
     DwmFlush();
+    capture_timing_.mark("compositor_flushed");
     desktop_ = capture_screen(bounds);
+    capture_timing_.mark("desktop_captured");
     surface_ = Image(bounds.right - bounds.left, bounds.bottom - bounds.top);
+    capture_timing_.mark("surface_allocated");
     if (!desktop_.valid() || !surface_.valid()) {
         MessageBoxW(owner_, L"Could not prepare the desktop capture.", L"Drawscr", MB_ICONERROR);
         return false;
@@ -53,8 +59,10 @@ bool Session::begin(bool whole_monitor) {
                             bounds.bottom - bounds.top, nullptr, nullptr, wc.hInstance, this);
     if (!hwnd_)
         return false;
+    capture_timing_.mark("overlay_created");
     active_ = this;
     hook_ = SetWindowsHookExW(WH_KEYBOARD_LL, keyboard, GetModuleHandleW(nullptr), 0);
+    capture_timing_.mark("before_show");
     ShowWindow(hwnd_, SW_SHOW);
     SetForegroundWindow(hwnd_);
     SetFocus(hwnd_);
@@ -132,6 +140,7 @@ void Session::paint(HDC dc) {
     if (!render_frozen_canvas(surface_, desktop_, canvas_.bounds(), frame, has_frame, marks,
                               selected_, canvas_.locked(), dpi))
         return;
+    capture_timing_.mark("canvas_rendered");
     if (canvas_.selecting()) {
         HDC buffered = surface_.begin();
         if (buffered) {
@@ -139,11 +148,14 @@ void Session::paint(HDC dc) {
             g.ScaleTransform(dpi / 96.0f, dpi / 96.0f);
             SolidBrush plate(Color(235, 29, 36, 37)), ink(Color(255, 235, 240, 236));
             g.FillRectangle(&plate, 14, 14, 530, 40);
+            capture_timing_.mark("before_font_family");
             UiTypeface family;
+            capture_timing_.mark("font_family_ready");
             Font font(family.medium(), 15, family.medium_style(), UnitPixel);
             g.DrawString(L"Drag to select  |  M monitor  |  Ctrl+A all  |  Esc cancel", -1, &font,
                          PointF(25, 24), &ink);
             g.Flush();
+            capture_timing_.mark("hint_text_drawn");
             GdiFlush();
             surface_.end(buffered);
         }
@@ -908,11 +920,17 @@ LRESULT Session::message(UINT msg, WPARAM w, LPARAM l) {
     switch (msg) {
     case WM_PAINT: {
         PAINTSTRUCT ps{};
+        capture_timing_.mark("first_paint_begin");
         HDC dc = BeginPaint(hwnd_, &ps);
         paint(dc);
         EndPaint(hwnd_, &ps);
+        if (capture_timing_.finish())
+            PostMessageW(hwnd_, WM_APP + 61, 0, 0);
         return 0;
     }
+    case WM_APP + 61:
+        capture_timing_.write(ini_);
+        return 0;
     case WM_PRINTCLIENT:
         if (canvas_.live()) {
             if (render_live_canvas(surface_, canvas_.bounds(), canvas_.selection(),
