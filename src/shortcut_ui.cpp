@@ -516,8 +516,8 @@ void SettingsWindow::paint(HDC dc) {
     text(g, L"Launch at Windows startup", {20, 208, 310, 24}, 13, Color(255, 233, 239, 232),
          FontStyleBold);
     const wchar_t* status =
-        startup_state == StartupState::On      ? L"On  РІР‚Сћ  starts quietly in the tray"
-        : startup_state == StartupState::Off   ? L"Off  РІР‚Сћ  starts quietly if enabled"
+        startup_state == StartupState::On      ? L"On  \u2022  starts quietly in the tray"
+        : startup_state == StartupState::Off   ? L"Off  \u2022  starts quietly if enabled"
         : startup_state == StartupState::Other ? L"Click to enable startup for this app"
                                                : L"Windows startup settings unavailable";
     text(g, status, {20, 230, 330, 20}, 10, Color(255, 166, 180, 176));
