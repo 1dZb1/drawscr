@@ -39,7 +39,10 @@ class App;
 
 class App {
   public:
-    ~App() { if (font_warmup_.joinable()) font_warmup_.join(); }
+    ~App() {
+        if (font_warmup_.joinable())
+            font_warmup_.join();
+    }
     bool create(HINSTANCE instance, bool quiet);
     int run();
     BindError change_trigger(const Trigger& trigger);
@@ -108,9 +111,11 @@ bool App::create(HINSTANCE instance, bool quiet) {
                 SolidBrush ink(Color(255, 255, 255, 255));
                 graphics.DrawString(L"Aa", -1, &font, PointF(0, 0), &ink);
                 graphics.Flush();
-            } catch (...) { /* Optional warmup must not terminate the application. */ }
+            } catch (...) { /* Optional warmup must not terminate the application. */
+            }
         });
-    } catch (...) { /* Capture still works if optional warmup cannot start. */ }
+    } catch (...) { /* Capture still works if optional warmup cannot start. */
+    }
     set_current_theme(load_theme(ini_));
     startup_ = std::make_unique<RegistryStartupStore>(path);
     icon_ = load_app_icon(instance_, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON));
@@ -157,7 +162,7 @@ bool App::create(HINSTANCE instance, bool quiet) {
                               {230, 174, 426, 210}, {368, 12, 402, 48},   {406, 12, 438, 48}};
         const wchar_t* help[] = {L"Select an area to capture",
                                  L"Capture the current monitor",
-                                 L"Choose shortcut, startup and theme",
+                                 L"Application and recording settings",
                                  L"Hide Drawscr to the system tray",
                                  L"Minimize to the tray",
                                  L"Close to the tray"};
@@ -316,13 +321,21 @@ void App::capture(bool whole) {
     }
 }
 void App::shortcut() {
+    if (session_ && session_->text_edit_active()) {
+        session_->hold_text_edit();
+        return;
+    }
     if ((session_ && session_->is_recording()) || !trigger_ || !startup_)
         return;
     if (settings_window_) {
         SetForegroundWindow(settings_window_);
         return;
     }
+    if (session_ && session_->modal_busy())
+        return;
     settings_open_ = true;
+    if (session_)
+        session_->set_settings_open(true);
     trigger_->suspend();
     SettingsActions actions;
     actions.bind = [this](const Trigger& selected) { return change_trigger(selected); };
@@ -359,6 +372,8 @@ void App::shortcut() {
         settings_open_ = false;
         if (shutting_down_ || !trigger_)
             return;
+        if (session_)
+            session_->set_settings_open(false);
         if (!accepted && !trigger_->active()) {
             BindError error{};
             trigger_->resume(error);
@@ -367,10 +382,13 @@ void App::shortcut() {
             trigger_error_ = BindError::None;
         InvalidateRect(hwnd_, nullptr, FALSE);
     };
-    settings_window_ = show_settings(hwnd_, trigger_->current(), *startup_, std::move(actions),
-                                     trigger_error_, load_start_minimized(ini_));
+    settings_window_ =
+        show_settings(session_ ? session_->window() : hwnd_, trigger_->current(), *startup_,
+                      std::move(actions), trigger_error_, load_start_minimized(ini_));
     if (!settings_window_) {
         settings_open_ = false;
+        if (session_)
+            session_->set_settings_open(false);
         BindError error{};
         trigger_->resume(error);
         trigger_error_ = error;
@@ -426,6 +444,9 @@ LRESULT App::message(UINT msg, WPARAM w, LPARAM l) {
         if (!settings_open_ && trigger_ && trigger_->active() &&
             trigger_->current().kind == TriggerKind::Keyboard && w == 1)
             fire_trigger();
+        return 0;
+    case WM_DRAW_SETTINGS:
+        shortcut();
         return 0;
     case WM_DRAW_TRIGGER:
         fire_trigger();

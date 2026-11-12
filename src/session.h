@@ -12,6 +12,7 @@
 
 namespace drawscr {
 constexpr UINT WM_DRAW_END = WM_APP + 20;
+constexpr UINT WM_DRAW_SETTINGS = WM_APP + 24;
 class Session {
   public:
     explicit Session(HWND owner, std::wstring ini = {}, ULONGLONG capture_started = 0);
@@ -45,6 +46,11 @@ class Session {
         width_ = w;
     }
     void restore_draw();
+    void remember_application(HWND window);
+    void set_settings_open(bool open);
+    bool modal_busy() const {
+        return modal_;
+    }
     bool text_edit_active() const {
         return text_transaction_.active();
     }
@@ -76,8 +82,10 @@ class Session {
     Image current_base();
     Image output_image();
     void record_command();
+    void record_settings();
     void start_recording();
     void record_frame();
+    Image capture_record_frame();
     void stop_recording();
     void recording_done();
     void save();
@@ -93,7 +101,7 @@ class Session {
     uint64_t record_start_ = 0;
     int countdown_ = 0, record_width_ = 0, record_height_ = 0;
     bool capture_excluded_ = false;
-    HWND owner_ = nullptr, hwnd_ = nullptr;
+    HWND owner_ = nullptr, hwnd_ = nullptr, previous_foreground_ = nullptr;
     HHOOK hook_ = nullptr;
     std::unique_ptr<Toolbar> toolbar_;
     std::unique_ptr<TextEditor> text_editor_;

@@ -91,7 +91,7 @@ struct Settings {
     UINT dpi = 96;
     SIZE selection{};
     bool open = true, accepted = false, expanded = false;
-    int countdown = 3, hover = -1, focus = 1, fps = 8;
+    int countdown = 5, hover = -1, focus = 1, fps = 8;
     GifCompression compression = GifCompression::Normal;
     PaintBuffer buffer;
     Tooltips tips;
@@ -119,6 +119,8 @@ struct Settings {
             countdown = 0;
         else if (index == 4)
             countdown = 3;
+        else if (index == 10)
+            countdown = 5;
         else if (index == 5) {
             expanded = !expanded;
             if (!expanded && (focus == 6 || focus == 7))
@@ -130,10 +132,8 @@ struct Settings {
         else if (index == 7)
             fps = std::min(20, fps + 1);
         else if (index == 8) {
-            if (can_start()) {
-                accepted = true;
-                open = false;
-            }
+            accepted = true;
+            open = false;
         } else if (index == 9)
             open = false;
         InvalidateRect(window, nullptr, FALSE);
@@ -149,7 +149,10 @@ struct Settings {
                    : p.x >= 268 && p.x < 382 ? 2
                                              : -1;
         if (p.y >= 162 && p.y < 194)
-            return p.x >= 126 && p.x < 244 ? 3 : p.x >= 252 && p.x < 382 ? 4 : -1;
+            return p.x >= 126 && p.x < 206   ? 3
+                   : p.x >= 214 && p.x < 294 ? 4
+                   : p.x >= 302 && p.x < 382 ? 10
+                                             : -1;
         if (expanded && p.y >= 213 && p.y < 245)
             return p.x >= 20 && p.x < 54 ? 6 : p.x >= 164 && p.x < 198 ? 7 : -1;
         int action = expanded ? 318 : 274;
@@ -166,7 +169,7 @@ void Settings::paint(HDC dc) {
     g.Clear(Color(255, 27, 32, 34));
     round_rect(g, {.5f, .5f, 401, expanded ? 369.0f : 325.0f}, Color(255, 27, 32, 34),
                Color(255, 62, 73, 73));
-    label(g, L"Record selected area", 20, 15, 20, Color(255, 240, 243, 237), FontStyleBold);
+    label(g, L"Recording settings", 20, 15, 20, Color(255, 240, 243, 237), FontStyleBold);
     wchar_t value[120]{};
     swprintf_s(value, L"Area: %ld x %ld px (original)", selection.cx, selection.cy);
     label(g, value, 20, 44, 12, Color(255, 225, 237, 230));
@@ -196,14 +199,16 @@ void Settings::paint(HDC dc) {
                chosen ? ui_color(current_theme().ink) : Color(255, 230, 236, 230));
     }
     label(g, L"Countdown", 20, 171, 12, Color(255, 192, 207, 199));
-    for (int i = 0; i < 2; ++i) {
-        RectF r{i ? 252.0f : 126.0f, 162, i ? 130.0f : 118.0f, 32};
-        bool chosen = countdown == (i ? 3 : 0);
+    const int delays[] = {0, 3, 5}, delay_indices[] = {3, 4, 10};
+    const wchar_t* delay_names[] = {L"None", L"3 seconds", L"5 seconds"};
+    for (int i = 0; i < 3; ++i) {
+        RectF r{126.0f + i * 88.0f, 162, 80, 32};
+        bool chosen = countdown == delays[i];
         round_rect(g, r,
-                   chosen           ? ui_color(current_theme().accent)
-                   : hover == i + 3 ? Color(255, 52, 62, 63)
-                                    : Color(255, 37, 45, 46));
-        center(g, i ? L"3 seconds" : L"None", r, 12,
+                   chosen                      ? ui_color(current_theme().accent)
+                   : hover == delay_indices[i] ? Color(255, 52, 62, 63)
+                                               : Color(255, 37, 45, 46));
+        center(g, delay_names[i], r, 12,
                chosen ? ui_color(current_theme().ink) : Color(255, 230, 236, 230));
     }
     if (expanded) {
@@ -238,22 +243,22 @@ void Settings::paint(HDC dc) {
               Color(255, 166, 180, 176));
     }
     RectF start{20, action, 178, 36}, cancel{204, action, 178, 36};
-    round_rect(g, start, ready ? ui_color(current_theme().accent) : Color(255, 52, 62, 63));
+    round_rect(g, start, ui_color(current_theme().accent));
     round_rect(g, cancel, hover == 9 ? Color(255, 52, 62, 63) : Color(255, 37, 45, 46));
-    center(g, L"Start recording", start, 13,
-           ready ? ui_color(current_theme().ink) : Color(255, 133, 146, 141));
+    center(g, L"Save settings", start, 13, ui_color(current_theme().ink));
     center(g, L"Cancel", cancel, 13, Color(255, 230, 236, 230));
     if (window && GetFocus() == window) {
         RectF rects[] = {{20, 123, 114, 32},
                          {143, 123, 116, 32},
                          {268, 123, 114, 32},
-                         {126, 162, 118, 32},
-                         {252, 162, 130, 32},
+                         {126, 162, 80, 32},
+                         {214, 162, 80, 32},
                          more,
                          {20, 213, 34, 32},
                          {164, 213, 34, 32},
                          start,
-                         cancel};
+                         cancel,
+                         {302, 162, 80, 32}};
         auto r = rects[focus];
         Pen pen(ui_color(current_theme().focus), 1);
         g.DrawRectangle(&pen, r.X + 2, r.Y + 2, r.Width - 4, r.Height - 4);
@@ -312,9 +317,9 @@ LRESULT Settings::message(UINT m, WPARAM w, LPARAM l) {
             return 0;
         }
         if (w == VK_TAB || w == VK_RIGHT || w == VK_LEFT) {
-            const int order[] = {0, 1, 2, 5, 3, 4, 6, 7, 8, 9};
-            int n = expanded ? 10 : 8;
-            const int compact[] = {0, 1, 2, 5, 3, 4, 8, 9};
+            const int order[] = {0, 1, 2, 5, 3, 4, 10, 6, 7, 8, 9};
+            int n = expanded ? 11 : 9;
+            const int compact[] = {0, 1, 2, 5, 3, 4, 10, 8, 9};
             const int* items = expanded ? order : compact;
             int pos = 0;
             while (pos < n && items[pos] != focus)
@@ -347,16 +352,17 @@ bool choose_recording(HWND owner, RecordOptions& out, SIZE selection) {
     wc.lpszClassName = L"Drawscr.RecordSettings";
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     RegisterClassW(&wc);
+    RecordOptions normalized = normalize_record_options(out);
     Settings s;
     s.dpi = GetDpiForWindow(owner);
     if (!s.dpi)
         s.dpi = 96;
     s.selection = selection;
-    s.fps = std::clamp(out.fps, 1, 20);
-    s.countdown = out.countdown;
-    s.compression = out.compression;
+    s.fps = normalized.fps;
+    s.countdown = normalized.countdown;
+    s.compression = normalized.compression;
     HWND h = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, wc.lpszClassName,
-                             L"Record selected area", WS_POPUP, 0, 0, scale(402, s.dpi),
+                             L"Recording settings", WS_POPUP, 0, 0, scale(402, s.dpi),
                              scale(326, s.dpi), owner, nullptr, wc.hInstance, &s);
     if (!h)
         return false;
@@ -366,13 +372,14 @@ bool choose_recording(HWND owner, RecordOptions& out, SIZE selection) {
         const RECT rects[] = {{20, 123, 134, 155},
                               {143, 123, 259, 155},
                               {268, 123, 382, 155},
-                              {126, 162, 244, 194},
-                              {252, 162, 382, 194},
+                              {126, 162, 206, 194},
+                              {214, 162, 294, 194},
                               {320, 40, 382, 66},
                               {},
                               {},
                               {20, 274, 198, 310},
-                              {204, 274, 382, 310}};
+                              {204, 274, 382, 310},
+                              {302, 162, 382, 194}};
         const wchar_t* help[] = {L"Reduce size while protecting fine details",
                                  L"Balance color fidelity and file size",
                                  L"Refine the palette for color fidelity",
@@ -381,9 +388,10 @@ bool choose_recording(HWND owner, RecordOptions& out, SIZE selection) {
                                  L"Adjust frame rate",
                                  L"Decrease the frame rate",
                                  L"Increase the frame rate",
-                                 L"Start recording the selected area",
-                                 L"Cancel and return to the selection"};
-        for (UINT i = 0; i < 10; ++i)
+                                 L"Save recording preferences",
+                                 L"Cancel without changing preferences",
+                                 L"Wait five seconds before recording (default)"};
+        for (UINT i = 0; i < 11; ++i)
             s.tips.add(i + 1, rects[i], help[i], s.dpi);
         s.sync_tips();
     }

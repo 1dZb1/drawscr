@@ -16,6 +16,7 @@ enum class Command {
     Copy,
     Save,
     Close,
+    Settings,
     SelectAll,
     Select,
     Pen,
@@ -37,17 +38,12 @@ struct ToolbarButton {
     const wchar_t* tip;
 };
 struct ToolbarGeometry {
-    RECT mode, interact, record, copy, save, close;
+    RECT mode, interact, record, copy, save, close, settings;
     std::array<RECT, 12> tools;
 };
 inline ToolbarGeometry wide_toolbar_geometry() {
-    ToolbarGeometry g{{10, 8, 128, 40},
-                      {132, 8, 230, 40},
-                      {234, 8, 344, 40},
-                      {348, 8, 407, 40},
-                      {411, 8, 470, 40},
-                      {484, 8, 516, 40},
-                      {}};
+    ToolbarGeometry g{{10, 8, 128, 40},  {132, 8, 230, 40}, {234, 8, 344, 40},  {348, 8, 407, 40},
+                      {411, 8, 470, 40}, {484, 8, 516, 40}, {484, 50, 516, 84}, {}};
     for (int i = 0; i < 12; ++i) {
         LONG x = 10 + i * 38 + (i >= 8 ? 8 : 0);
         g.tools[static_cast<size_t>(i)] = {x, 50, x + 34, 84};

@@ -142,6 +142,17 @@ static void icon(Graphics& g, Command cmd, float x, float y, Color c, COLORREF s
         g.DrawLine(&p, 3, 15, 15, 15);
         g.DrawLine(&p, 15, 15, 15, 12);
         break;
+    case Command::Settings: {
+        for (int i = 0; i < 8; ++i) {
+            g.TranslateTransform(9, 9);
+            g.RotateTransform(45.0f);
+            g.TranslateTransform(-9, -9);
+            g.DrawLine(&p, 9, 1, 9, 4);
+        }
+        g.DrawEllipse(&p, 4, 4, 10, 10);
+        g.DrawEllipse(&p, 7, 7, 4, 4);
+        break;
+    }
     case Command::Close:
         g.DrawLine(&p, 4, 4, 14, 14);
         g.DrawLine(&p, 14, 4, 4, 14);
@@ -211,7 +222,7 @@ void Toolbar::layout() {
     const Command cmd[] = {Command::Select,    Command::Pen,    Command::Arrow, Command::Line,
                            Command::Rectangle, Command::Marker, Command::Text,  Command::Redact,
                            Command::Color,     Command::Width,  Command::Undo,  Command::Redo};
-    const wchar_t* tips[] = {L"Select and move objects",
+    const wchar_t* tips[] = {L"Move objects or drag empty space to move the frame",
                              L"Pen",
                              L"Arrow",
                              L"Line",
@@ -225,18 +236,27 @@ void Toolbar::layout() {
                              L"Redo  Ctrl+Y"};
     for (int i = 0; i < 12; ++i)
         buttons_.push_back({cmd[i], g.tools[static_cast<size_t>(i)], L"", tips[i]});
+    buttons_.push_back({Command::Settings, g.settings, L"", L"Application settings"});
     if (bar_width_ < 526) {
-        int x = 10, y = 8;
+        int x = 10, y = 8, right = bar_width_ - 52;
         for (auto& b : buttons_) {
-            int w = b.rect.right - b.rect.left;
-            if (x + w + 10 > bar_width_ && x > 10) {
+            if (b.command == Command::Close) {
+                b.rect = {bar_width_ - 42, 8, bar_width_ - 10, 40};
+                continue;
+            }
+            if (b.command == Command::Settings) {
+                b.rect = {bar_width_ - 42, 50, bar_width_ - 10, 84};
+                continue;
+            }
+            int w = std::min<int>(b.rect.right - b.rect.left, std::max(20, right - 10));
+            if (x + w > right && x > 10) {
                 x = 10;
                 y += 40;
             }
             b.rect = {x, y, x + w, y + 32};
             x += w + 4;
         }
-        bar_height_ = y + 42;
+        bar_height_ = std::max(94, y + 42);
     }
 }
 void Toolbar::reposition() {
@@ -289,8 +309,7 @@ void Toolbar::refresh() {
                                              : L"Record the selected area as an animated GIF");
                 break;
             case Command::Text:
-                tips_.set_text(id, recording ? L"Text editing is unavailable during recording"
-                                             : L"Text");
+                tips_.set_text(id, L"Text (apply to include in recording)");
                 break;
             default:
                 break;
@@ -360,7 +379,7 @@ void Toolbar::render(HDC target, int width, int height) {
         if ((b.command == Command::Interact && !live) ||
             (session_.is_recording() &&
              (b.command == Command::Mode || b.command == Command::Copy ||
-              b.command == Command::Save || b.command == Command::Text))) {
+              b.command == Command::Save || b.command == Command::Settings))) {
             bg = Color(255, 35, 42, 44);
             fg = Color(255, 112, 124, 121);
         }
@@ -436,6 +455,16 @@ void Toolbar::render(HDC target, int width, int height) {
 }
 void Toolbar::choose(POINT p) {
     if (session_.text_edit_active()) {
+        POINT logical{MulDiv(p.x, 96, static_cast<int>(dpi_)),
+                      MulDiv(p.y, 96, static_cast<int>(dpi_))};
+        for (const auto& b : buttons_)
+            if (PtInRect(&b.rect, logical) &&
+                (b.command == Command::Close ||
+                 (b.command == Command::Record && session_.is_recording()))) {
+                session_.command(b.command);
+                refresh();
+                return;
+            }
         session_.hold_text_edit();
         return;
     }
@@ -466,7 +495,7 @@ void Toolbar::choose(POINT p) {
             focus_ = static_cast<int>(i);
             auto command = buttons_[i].command;
             if ((command == Command::Interact && !session_.is_live()) ||
-                (command == Command::Text && session_.is_recording())) {
+                (command == Command::Settings && session_.is_recording())) {
                 refresh();
                 return;
             }
@@ -495,6 +524,10 @@ LRESULT CALLBACK Toolbar::proc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
 }
 LRESULT Toolbar::message(UINT msg, WPARAM w, LPARAM l) {
     switch (msg) {
+    case WM_ACTIVATE:
+        if (LOWORD(w) != WA_INACTIVE)
+            session_.remember_application(reinterpret_cast<HWND>(l));
+        break;
     case WM_PAINT: {
         PAINTSTRUCT ps{};
         HDC dc = BeginPaint(hwnd_, &ps);

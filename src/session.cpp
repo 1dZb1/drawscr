@@ -13,7 +13,9 @@ namespace drawscr {
 static constexpr wchar_t overlay_class[] = L"Drawscr.Overlay";
 Session* Session::active_ = nullptr;
 Session::Session(HWND owner, std::wstring ini, ULONGLONG capture_started)
-    : owner_(owner), ini_(std::move(ini)), capture_timing_(capture_started) {}
+    : owner_(owner), ini_(std::move(ini)), capture_timing_(capture_started) {
+    record_options_ = load_record_options(ini_);
+}
 Session::~Session() {
     if (hwnd_) {
         KillTimer(hwnd_, 42);
@@ -32,6 +34,7 @@ Session::~Session() {
 }
 
 bool Session::begin(bool whole_monitor) {
+    remember_application(GetForegroundWindow());
     capture_timing_.mark("begin");
     RECT bounds{GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN), 0, 0};
     bounds.right = bounds.left + GetSystemMetrics(SM_CXVIRTUALSCREEN);
@@ -309,6 +312,10 @@ void Session::mouse_down(POINT client) {
     if (tool_ == Tool::Select) {
         selected_ = hit_test(working_, p);
         if (selected_ < 0) {
+            // Empty space in Select moves the capture frame; marks retain priority.
+            working_.clear();
+            if (canvas_.begin_frame(FramePart::Move, p))
+                SetCapture(hwnd_);
             repaint();
             return;
         }
@@ -436,6 +443,12 @@ void Session::set_live(bool value) {
     }
     repaint();
 }
+void Session::remember_application(HWND window) {
+    DWORD process = 0;
+    if (IsWindow(window) && GetWindowThreadProcessId(window, &process) &&
+        process != GetCurrentProcessId())
+        previous_foreground_ = window;
+}
 void Session::set_interacting(bool value) {
     if (!canvas_.live() || value == canvas_.interacting())
         return;
@@ -446,6 +459,10 @@ void Session::set_interacting(bool value) {
             L"Drawscr", MB_ICONWARNING);
         return;
     }
+    remember_application(GetForegroundWindow());
+    if (GetCapture() == hwnd_)
+        ReleaseCapture();
+    finish_pointer_gesture();
     if (!canvas_.set_interacting(value))
         return;
     LONG_PTR style = GetWindowLongPtrW(hwnd_, GWL_EXSTYLE);
@@ -460,6 +477,8 @@ void Session::set_interacting(bool value) {
         toolbar_->set_selection(canvas_.selection(),
                                 frame_chrome_bounds(canvas_.selection(), canvas_.bounds(), dpi));
     }
+    if (value && IsWindow(previous_foreground_))
+        SetForegroundWindow(previous_foreground_);
     if (!value) {
         SetForegroundWindow(hwnd_);
         SetFocus(hwnd_);
@@ -558,8 +577,7 @@ std::vector<Mark> Session::display_marks() const {
     return marks;
 }
 void Session::begin_text(POINT anchor, int existing_index) {
-    if (text_editor_ || is_recording() ||
-        (existing_index < 0 && history_.current().size() >= 256)) {
+    if (text_editor_ || is_encoding() || (existing_index < 0 && history_.current().size() >= 256)) {
         MessageBeep(MB_ICONWARNING);
         return;
     }
@@ -643,11 +661,41 @@ std::wstring Session::record_label() const {
     }
     return L"Record";
 }
+void Session::set_settings_open(bool open) {
+    modal_ = open;
+    if (open) {
+        if (GetCapture() == hwnd_)
+            ReleaseCapture();
+        finish_pointer_gesture();
+        if (toolbar_)
+            toolbar_->suspend_tooltips_for_capture();
+    } else {
+        record_options_ = load_record_options(ini_);
+        if (toolbar_)
+            toolbar_->resume_tooltips_after_capture();
+    }
+    EnableWindow(hwnd_, !open);
+    if (toolbar_)
+        EnableWindow(toolbar_->window(), !open);
+    if (!open) {
+        if (!is_interacting()) {
+            SetForegroundWindow(hwnd_);
+            SetFocus(hwnd_);
+        }
+        repaint();
+    }
+}
+void Session::record_settings() {
+    if (is_recording())
+        return;
+    PostMessageW(owner_, WM_DRAW_SETTINGS, 0, 0);
+}
 void Session::record_command() {
     if (record_state_ == RecordState::Countdown) {
         KillTimer(hwnd_, 42);
         record_state_ = RecordState::Idle;
         canvas_.lock_frame(false);
+        set_interacting(false);
         repaint();
         return;
     }
@@ -661,6 +709,7 @@ void Session::record_command() {
         recorder_.reset();
         record_state_ = RecordState::Idle;
         canvas_.lock_frame(false);
+        set_interacting(false);
         repaint();
         return;
     }
@@ -673,11 +722,6 @@ void Session::record_command() {
     }
     RECT selected = canvas_.selection();
     SIZE source{selected.right - selected.left, selected.bottom - selected.top};
-    modal_ = true;
-    bool chosen = choose_recording(hwnd_, record_options_, source);
-    modal_ = false;
-    if (!chosen)
-        return;
     if (!valid_record_frame_size(source.cx, source.cy)) {
         MessageBoxW(hwnd_,
                     L"The selected area exceeds the recording limit. Resize the frame first.",
@@ -688,6 +732,10 @@ void Session::record_command() {
     if (!canvas_.live())
         return;
     record_rect_ = selected;
+    // Recording starts ready to use Windows. A drawing-tool click restores the canvas.
+    set_interacting(true);
+    if (!canvas_.interacting())
+        return;
     canvas_.lock_frame(true);
     countdown_ = record_options_.countdown;
     if (countdown_ > 0) {
@@ -709,6 +757,7 @@ void Session::start_recording() {
         recorder_.reset();
         record_state_ = RecordState::Idle;
         canvas_.lock_frame(false);
+        set_interacting(false);
         MessageBoxW(hwnd_, error.c_str(), L"Drawscr", MB_ICONERROR);
         repaint();
         return;
@@ -720,27 +769,30 @@ void Session::start_recording() {
         SetTimer(hwnd_, 42, 1000 / record_options_.fps, nullptr);
     repaint();
 }
+Image Session::capture_record_frame() {
+    Image image = capture_screen(record_rect_);
+    if (!image.valid())
+        return {};
+    HDC dc = image.begin();
+    if (!dc)
+        return {};
+    const auto& marks = dragging_ ? working_ : history_.current();
+    draw_marks(dc, marks, -1, {record_rect_.left, record_rect_.top});
+    GdiFlush();
+    image.end(dc);
+    return image;
+}
 void Session::record_frame() {
     if (record_state_ != RecordState::Recording || !recorder_)
         return;
-    uint64_t elapsed = GetTickCount64() - record_start_;
-    Image image = capture_screen(record_rect_);
+    Image image = capture_record_frame();
     if (!image.valid()) {
         stop_recording();
         MessageBoxW(hwnd_, L"Capture stopped because the screen could not be read.", L"Drawscr",
                     MB_ICONWARNING);
         return;
     }
-    HDC dc = image.begin();
-    if (!dc) {
-        stop_recording();
-        return;
-    }
-    const auto& marks = dragging_ ? working_ : history_.current();
-    draw_marks(dc, marks, -1, {record_rect_.left, record_rect_.top});
-    GdiFlush();
-    image.end(dc);
-    auto result = recorder_->submit(std::move(image), elapsed);
+    auto result = recorder_->submit(std::move(image), GetTickCount64() - record_start_);
     if (result == SubmitResult::Closed)
         stop_recording();
     if (toolbar_)
@@ -750,7 +802,13 @@ void Session::record_frame() {
 void Session::stop_recording() {
     if (record_state_ != RecordState::Recording || !recorder_)
         return;
+    finish_text(false); // A draft is private until Apply; never trap Stop behind editing.
     KillTimer(hwnd_, 42);
+    // Sample once more before closing so Apply followed immediately by Stop is retained.
+    // A closed worker is terminal; never recurse through record_frame here.
+    Image final_frame = capture_record_frame();
+    if (final_frame.valid())
+        recorder_->submit(std::move(final_frame), GetTickCount64() - record_start_);
     recorder_->stop(GetTickCount64() - record_start_);
     record_state_ = RecordState::Encoding;
     repaint();
@@ -759,11 +817,13 @@ void Session::recording_done() {
     if (!recorder_ || !recorder_->finished())
         return;
     KillTimer(hwnd_, 42);
+    finish_text(false);
     auto result = recorder_->take_result();
     recorder_.reset();
     if (!result.ok) {
         record_state_ = RecordState::Idle;
         canvas_.lock_frame(false);
+        set_interacting(false);
         repaint();
         std::wstring message = result.error.empty()
                                    ? (result.failure == RecordingFailure::OutOfMemory
@@ -791,6 +851,7 @@ void Session::recording_done() {
         DeleteFileW(result.gif_path.c_str());
     record_state_ = RecordState::Idle;
     canvas_.lock_frame(false);
+    set_interacting(false);
     if (preview == PreviewResult::Saved) {
         cancel();
         return;
@@ -799,13 +860,33 @@ void Session::recording_done() {
 }
 
 void Session::command(Command c) {
-    if (text_editor_) {
-        hold_text_edit();
+    if (modal_)
         return;
+    if (text_editor_) {
+        if (c == Command::Close || (c == Command::Record && is_recording()))
+            finish_text(false);
+        else {
+            hold_text_edit();
+            return;
+        }
     }
     if (is_recording() && (c == Command::Mode || c == Command::Screenshot || c == Command::Live ||
                            c == Command::Copy || c == Command::Save || c == Command::SelectAll))
         return;
+    switch (c) {
+    case Command::Select:
+    case Command::Pen:
+    case Command::Arrow:
+    case Command::Line:
+    case Command::Rectangle:
+    case Command::Marker:
+    case Command::Text:
+    case Command::Redact:
+        set_interacting(false);
+        break;
+    default:
+        break;
+    }
     switch (c) {
     case Command::Mode:
         set_live(!canvas_.live());
@@ -818,6 +899,9 @@ void Session::command(Command c) {
         break;
     case Command::Interact:
         set_interacting(!canvas_.interacting());
+        break;
+    case Command::Settings:
+        record_settings();
         break;
     case Command::Record:
         if (canvas_.output(CanvasOutput::Record) == CanvasOutput::Record)
@@ -893,7 +977,11 @@ LRESULT CALLBACK Session::keyboard(int code, WPARAM w, LPARAM l) {
             if (consumed)
                 return 1;
         }
-        EscapeTarget target = escape_target(active_->modal_, active_->text_editor_ != nullptr);
+        // While recording another application, Escape belongs to that application.
+        // Stop/Close remain available on the excluded toolbar.
+        bool pass_to_app = active_->is_recording() && active_->is_interacting();
+        EscapeTarget target =
+            escape_target(active_->modal_ || pass_to_app, active_->text_editor_ != nullptr);
         if (target != EscapeTarget::PassThrough && (w == WM_KEYDOWN || w == WM_SYSKEYDOWN)) {
             if (!active_->escape_held_) {
                 active_->escape_held_ = true;
@@ -918,6 +1006,10 @@ LRESULT CALLBACK Session::proc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
 }
 LRESULT Session::message(UINT msg, WPARAM w, LPARAM l) {
     switch (msg) {
+    case WM_ACTIVATE:
+        if (LOWORD(w) != WA_INACTIVE)
+            remember_application(reinterpret_cast<HWND>(l));
+        break;
     case WM_PAINT: {
         PAINTSTRUCT ps{};
         capture_timing_.mark("first_paint_begin");
@@ -989,8 +1081,13 @@ LRESULT Session::message(UINT msg, WPARAM w, LPARAM l) {
                     cursor = IDC_SIZEWE;
                 else {
                     RECT selected = canvas_.selection();
-                    if (PtInRect(&selected, p))
-                        cursor = tool_ == Tool::Select ? IDC_ARROW : IDC_CROSS;
+                    if (PtInRect(&selected, p)) {
+                        bool move_frame = tool_ == Tool::Select && !canvas_.locked() &&
+                                          hit_test(history_.current(), p) < 0;
+                        cursor = move_frame              ? IDC_SIZEALL
+                                 : tool_ == Tool::Select ? IDC_ARROW
+                                                         : IDC_CROSS;
+                    }
                 }
             }
             SetCursor(LoadCursorW(nullptr, cursor));

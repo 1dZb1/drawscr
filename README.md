@@ -11,7 +11,7 @@ Drawscr is a portable Windows tool for quick screenshots, annotations and GIF re
 ## Start here
 
 1. **Get the portable app:** open [portable/Drawscr.exe](portable/Drawscr.exe). On GitHub, use **Download raw file**, then run the downloaded EXE. Windows 10 or 11, 64-bit, is required; there is no installer.
-2. Press **Print Screen**, or choose a capture action from the launcher or tray. Drag to select an area; move the frame or resize it with its handles.
+2. Press **Print Screen**, or choose a capture action from the launcher or tray. Drag to select an area; move the frame or resize it with its handles. With **Select** (the pointer arrow), drag empty space inside the selection to reposition the frame; existing annotations keep their own move behavior.
 3. Annotate, then press **Ctrl+C** to copy or **Ctrl+S** to save. A successful copy or save closes the capture.
 
 Settings lets you choose a keyboard or mouse shortcut, a calm accent theme, and optional tray or Windows-startup behavior. Preferences are saved in `Drawscr.ini` beside the EXE; use a writable folder and move the INI with the app to keep them. If Print Screen conflicts with another tool, **Assign anyway** lets Drawscr attempt to intercept it while running; another app can still take the key first. Drawscr does not change the Windows snipping setting.
@@ -24,7 +24,7 @@ Settings lets you choose a keyboard or mouse shortcut, a calm accent theme, and 
 
 ## Record a GIF
 
-Select and adjust the area, choose **Record**, stop when ready, then preview and save or discard. The GIF uses the selected pixel dimensions. Strong, Normal and Quality combine palette choices with bounded temporal color stability; frame rate is available under **More**. The encoder compares opaque, transparent and compact-palette frame representations and chooses the smaller result. Temporal optimization keeps the selected dimensions and timing, protects coherent thin features, and is bypassed for sources with at most 256 exact colors. It is still lossy: subtle texture changes are possible, especially in Strong mode, and size savings depend on the recording.
+Select and adjust the area, choose **Record** to start the countdown immediately, stop when ready, then preview and save or discard. No settings dialog interrupts the start. The default countdown is **5 seconds**. The GIF uses the selected pixel dimensions. Strong, Normal and Quality combine palette choices with bounded temporal color stability; frame rate is available on the **Record** tab in **Settings**. The encoder compares opaque, transparent and compact-palette frame representations and chooses the smaller result. Temporal optimization keeps the selected dimensions and timing, protects coherent thin features, and is bypassed for sources with at most 256 exact colors. It is still lossy: subtle texture changes are possible, especially in Strong mode, and size savings depend on the recording.
 
 <p align="center">
   <img src="assets/Drawscr.gif" width="380" alt="Example animated GIF of a white flower">
@@ -32,8 +32,16 @@ Select and adjust the area, choose **Record**, stop when ready, then preview and
 
 *Example GIF: about 18 MB, 8.4 seconds.*
 
-GIF supports at most 256 colors, so gradients can lose detail. Recordings have no fixed time limit but use bounded memory and local temporary storage; recording stops if space becomes low. A frame is limited to 8192 pixels per side and 64 MiB. An unexpected termination can leave temporary files containing captured pixels. Live capture and recording require Windows support for excluding Drawscr windows from capture. Text editing is unavailable during an active recording.
+GIF supports at most 256 colors, so gradients can lose detail. Recordings have no fixed time limit but use bounded memory and local temporary storage; recording stops if space becomes low. A frame is limited to 8192 pixels per side and 64 MiB. An unexpected termination can leave temporary files containing captured pixels. Live capture and recording require Windows support for excluding Drawscr windows from capture. Text can be added during recording: choose **Text**, type your note and click **Apply**. Only applied text is recorded; the editor controls and unapplied draft are excluded.
 
+## What changed
+
+- **One settings window:** the gear below Close opens the same Settings window as the launcher and tray. **General** contains the capture shortcut, Windows startup, start-minimized option and theme. **Record** contains GIF compression, frame rate and countdown (None, 3 or 5 seconds). **Save recording settings** remembers these preferences between captures and app restarts without changing General settings.
+- **Start recording directly:** Record uses your saved preferences immediately, with a five-second countdown by default. Press it again to cancel the countdown or stop recording.
+- **Move the frame naturally:** with the Select pointer active, drag any empty part inside the selection. Annotations still move independently when you grab them.
+- **Record real interaction:** recording now starts in **Interact**, so mouse clicks and keyboard input reach the Windows application underneath. The capture area stays fixed throughout the recording.
+- **Annotate while recording:** choose a drawing tool to add marks, or use Text and **Apply** for a note. Click **Interact** to return to the underlying app. Applied notes and strokes appear in the GIF, without the Drawscr controls.
+- **Keep control:** Stop and Close remain available during text editing and discard unapplied drafts. In Interact during recording, Escape is passed to the application underneath.
 ## Capture responsiveness
 
 Drawscr warms its UI fonts using a small private offscreen bitmap at launch and performs one compositor synchronization before capture. If capture initialization takes at least one second, it writes `Drawscr.ini.capture-timing.log` beside its settings file. This bounded diagnostic contains stage timings only, not screen pixels or document names.

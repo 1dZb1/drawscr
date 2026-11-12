@@ -1,4 +1,5 @@
 #include "shortcut_ui.h"
+#include "record_ui.h"
 #include "paint_buffer.h"
 #include "theme.h"
 #include "ui_type.h"
@@ -67,9 +68,11 @@ struct SettingsWindow {
     HWND window = nullptr;
     UINT dpi = 96;
     bool accepted = false, owned_by_window = false, conflict = false, start_minimized = false;
-    int hover = -1, focus = 2;
+    int hover = -1, focus = 2, tab = 0;
     bool tracking = false;
     Tooltips tips;
+    RecordOptions recording;
+    std::wstring record_notice;
     Trigger keyboard{}, mouse{TriggerKind::Mouse, 0, 0};
     TriggerKind kind = TriggerKind::Keyboard;
     StartupStore* startup = nullptr;
@@ -84,6 +87,8 @@ struct SettingsWindow {
     static LRESULT CALLBACK capture_proc(int, WPARAM, LPARAM);
     LRESULT message(UINT, WPARAM, LPARAM);
     void paint(HDC);
+    void paint_record(Graphics& g);
+    void sync_tips();
     Trigger& draft() {
         return kind == TriggerKind::Keyboard ? keyboard : mouse;
     }
@@ -97,7 +102,7 @@ struct SettingsWindow {
         swallowed.fill(false);
     }
     void sync_capture() {
-        bool wanted = window && kind == TriggerKind::Keyboard && focus == 2 &&
+        bool wanted = window && tab == 0 && kind == TriggerKind::Keyboard && focus == 2 &&
                       GetFocus() == window && GetForegroundWindow() == window;
         if (!wanted) {
             stop_capture();
@@ -131,6 +136,28 @@ struct SettingsWindow {
         p.y = MulDiv(p.y, 96, dpi);
         if (p.x >= 410 && p.x < 448 && p.y >= 10 && p.y < 46)
             return 7;
+        if (p.y >= 51 && p.y < 83)
+            return p.x >= 20 && p.x < 225 ? 20 : p.x >= 235 && p.x < 440 ? 21 : -1;
+        if (tab == 1) {
+            if (p.y >= 145 && p.y < 181) {
+                for (int i = 0; i < 3; ++i)
+                    if (p.x >= 20 + i * 142 && p.x < 156 + i * 142)
+                        return 30 + i;
+            }
+            if (p.y >= 231 && p.y < 267) {
+                for (int i = 0; i < 3; ++i)
+                    if (p.x >= 20 + i * 142 && p.x < 156 + i * 142)
+                        return 33 + i;
+            }
+            if (p.y >= 317 && p.y < 353)
+                return p.x >= 20 && p.x < 62 ? 36 : p.x >= 178 && p.x < 220 ? 37 : -1;
+            if (p.y >= 438 && p.y < 474)
+                return p.x >= 20 && p.x < 290 ? 38 : p.x >= 300 && p.x < 440 ? 5 : -1;
+            return -1;
+        }
+        if (p.y >= 20 && p.y < 49 && p.x >= 330 && p.x < 400)
+            return 6;
+        p.y -= 48;
         if (p.y >= 63 && p.y < 95)
             return p.x >= 20 && p.x < 225 ? 0 : p.x >= 235 && p.x < 440 ? 1 : -1;
         if (p.y >= 105 && p.y < 149 && p.x >= 20 && p.x < 440)
@@ -149,8 +176,6 @@ struct SettingsWindow {
             return 12;
         if (p.y >= 253 && p.y < 291 && p.x >= 20 && p.x < 440)
             return 13;
-        if (p.y >= 20 && p.y < 49 && p.x >= 330 && p.x < 400)
-            return 6;
         return -1;
     }
     void bind() {
@@ -194,7 +219,40 @@ struct SettingsWindow {
             PostMessageW(window, WM_CLOSE, 0, 0);
             return;
         }
+        if (n == 20 || n == 21) {
+            tab = n - 20;
+            focus = n;
+            hover = -1;
+            stop_capture();
+            sync_tips();
+            InvalidateRect(window, nullptr, FALSE);
+            return;
+        }
         focus = n;
+        if (tab == 1) {
+            if (n >= 30 && n <= 32)
+                recording.compression = static_cast<GifCompression>(n - 30);
+            else if (n >= 33 && n <= 35) {
+                const int delays[] = {0, 3, 5};
+                recording.countdown = delays[n - 33];
+            } else if (n == 36)
+                recording.fps = std::max(1, recording.fps - 1);
+            else if (n == 37)
+                recording.fps = std::min(20, recording.fps + 1);
+            else if (n == 38) {
+                std::wstring path = actions.config_path ? actions.config_path() : L"";
+                if (path.empty() || !save_record_options(path, recording))
+                    record_notice =
+                        L"Could not save recording settings. Check that the folder is writable.";
+                else
+                    record_notice = L"Recording settings saved.";
+            }
+            if (n != 38)
+                record_notice.clear();
+            stop_capture();
+            InvalidateRect(window, nullptr, FALSE);
+            return;
+        }
         if (n == 0 || n == 1) {
             kind = n ? TriggerKind::Mouse : TriggerKind::Keyboard;
             focus = 2;
@@ -242,13 +300,118 @@ struct SettingsWindow {
         InvalidateRect(window, nullptr, FALSE);
     }
     void capture_mouse(UINT button) {
-        if (kind != TriggerKind::Mouse || focus != 2)
+        if (tab != 0 || kind != TriggerKind::Mouse || focus != 2)
             return;
         mouse = {TriggerKind::Mouse, held_modifiers(), button};
         refresh_conflict();
         InvalidateRect(window, nullptr, FALSE);
     }
 };
+
+void SettingsWindow::paint_record(Graphics& g) {
+    auto button = [&](int id, RectF r, const wchar_t* title, bool selected) {
+        round_rect(g, r,
+                   selected      ? ui_color(current_theme().accent)
+                   : hover == id ? Color(255, 52, 62, 63)
+                                 : Color(255, 37, 45, 46));
+        text(g, title, r, 12, selected ? ui_color(current_theme().ink) : Color(255, 230, 236, 230),
+             FontStyleRegular, true);
+        if (window && GetFocus() == window && focus == id) {
+            Pen p(ui_color(current_theme().focus), 1);
+            g.DrawRectangle(&p, r.X + 2, r.Y + 2, r.Width - 4, r.Height - 4);
+        }
+    };
+    text(g, L"GIF recording", {20, 101, 420, 26}, 16, Color(255, 240, 243, 237), FontStyleBold);
+    text(g, L"Compression", {20, 126, 420, 20}, 11, Color(255, 166, 180, 176));
+    const wchar_t* compression[] = {L"Strong", L"Normal", L"Quality"};
+    for (int i = 0; i < 3; ++i)
+        button(30 + i, {20.0f + i * 142, 145, 136, 36}, compression[i],
+               static_cast<int>(recording.compression) == i);
+    text(g, L"Countdown before recording", {20, 205, 420, 23}, 12, Color(255, 192, 207, 199));
+    const wchar_t* delays[] = {L"None", L"3 seconds", L"5 seconds"};
+    const int seconds[] = {0, 3, 5};
+    for (int i = 0; i < 3; ++i)
+        button(33 + i, {20.0f + i * 142, 231, 136, 36}, delays[i],
+               recording.countdown == seconds[i]);
+    text(g, L"Frames per second (1-20)", {20, 291, 420, 23}, 12, Color(255, 192, 207, 199));
+    button(36, {20, 317, 42, 36}, L"-", false);
+    button(37, {178, 317, 42, 36}, L"+", false);
+    std::wstring fps = std::to_wstring(recording.fps) + L" fps";
+    text(g, fps.c_str(), {68, 317, 104, 36}, 14, Color(255, 235, 241, 234), FontStyleRegular, true);
+    text(g, L"Record starts directly with these preferences.", {20, 372, 420, 23}, 11,
+         Color(255, 166, 180, 176));
+    text(g, L"Use Interact to work in Windows and drawing tools to annotate.", {20, 394, 420, 35},
+         11, Color(255, 166, 180, 176));
+    button(38, {20, 438, 270, 36}, L"Save recording settings", true);
+    button(5, {300, 438, 140, 36}, L"Close", false);
+    if (!record_notice.empty())
+        text(g, record_notice.c_str(), {20, 482, 420, 35}, 10, Color(255, 239, 188, 143));
+    text(g, L"Applies to future recordings. General settings stay unchanged.", {20, 527, 420, 20},
+         10, Color(255, 166, 180, 176));
+    if (window && GetFocus() == window && focus == 7) {
+        Pen p(ui_color(current_theme().focus), 1);
+        g.DrawRectangle(&p, 412, 12, 34, 32);
+    }
+}
+void SettingsWindow::sync_tips() {
+    tips.reset();
+    if (!window || !tips.create(window))
+        return;
+    tips.add(21, {20, 51, 225, 83}, L"General application settings", dpi);
+    tips.add(22, {235, 51, 440, 83}, L"GIF recording preferences", dpi);
+    tips.add(8, {410, 10, 448, 46}, L"Close settings", dpi);
+    if (tab == 1) {
+        const RECT rects[] = {{20, 145, 156, 181}, {162, 145, 298, 181}, {304, 145, 440, 181},
+                              {20, 231, 156, 267}, {162, 231, 298, 267}, {304, 231, 440, 267},
+                              {20, 317, 62, 353},  {178, 317, 220, 353}, {20, 438, 290, 474},
+                              {300, 438, 440, 474}};
+        const wchar_t* help[] = {L"Reduce GIF size while protecting fine detail",
+                                 L"Balance color fidelity and file size",
+                                 L"Refine the palette for color fidelity",
+                                 L"Start without a countdown",
+                                 L"Wait three seconds before recording",
+                                 L"Wait five seconds before recording (default)",
+                                 L"Decrease frame rate",
+                                 L"Increase frame rate",
+                                 L"Save only the recording preferences",
+                                 L"Close settings"};
+        for (UINT i = 0; i < 10; ++i)
+            tips.add(31 + i, rects[i], help[i], dpi);
+        return;
+    }
+    config_tip = actions.config_path ? actions.config_path() : L"";
+    tips.add(15, {20, 481, 440, 516}, config_tip.c_str(), dpi);
+    const RECT rects[] = {{20, 63, 225, 95},    {235, 63, 440, 95},   {20, 105, 440, 149},
+                          {20, 205, 440, 249},  {20, 390, 225, 426},  {235, 390, 440, 426},
+                          {330, 20, 400, 49},   {410, 10, 448, 46},   {20, 319, 122, 353},
+                          {126, 319, 228, 353}, {232, 319, 334, 353}, {338, 319, 440, 353},
+                          {335, 478, 440, 502}, {20, 253, 440, 291}};
+    const wchar_t* help[] = {L"Choose a keyboard shortcut",
+                             L"Choose a mouse shortcut",
+                             L"Press the keys or mouse button for capture",
+                             L"Toggle launch at Windows startup",
+                             L"Save the capture trigger",
+                             L"Close settings",
+                             L"Restore Print Screen as the default",
+                             L"Close settings",
+                             L"Use the mint theme",
+                             L"Use the sky blue theme",
+                             L"Use the amber theme",
+                             L"Use the violet theme",
+                             L"Open dzrobo.com in your browser",
+                             L"Start normal launches minimized to the tray"};
+    for (UINT i = 0; i < 14; ++i) {
+        if (i == 7)
+            continue;
+        RECT r = rects[i];
+        if (i != 6) {
+            r.top += 48;
+            r.bottom += 48;
+        }
+        tips.add(i + 1, r, help[i], dpi);
+    }
+}
+
 SettingsWindow* SettingsWindow::capture_owner = nullptr;
 LRESULT CALLBACK SettingsWindow::capture_proc(int code, WPARAM w, LPARAM l) {
     SettingsWindow* s = capture_owner;
@@ -265,7 +428,7 @@ LRESULT CALLBACK SettingsWindow::capture_proc(int code, WPARAM w, LPARAM l) {
     }
     if (down && s->swallowed[key])
         return 1;
-    if (!down || s->kind != TriggerKind::Keyboard || s->focus != 2 ||
+    if (!down || s->tab != 0 || s->kind != TriggerKind::Keyboard || s->focus != 2 ||
         GetForegroundWindow() != s->window || GetFocus() != s->window || modifier_key(key))
         return CallNextHookEx(nullptr, code, w, l);
     UINT held = held_modifiers();
@@ -281,11 +444,13 @@ void SettingsWindow::paint(HDC dc) {
     g.SetTextRenderingHint(TextRenderingHintAntiAliasGridFit);
     g.ScaleTransform(dpi / 96.0f, dpi / 96.0f);
     g.Clear(Color(255, 27, 32, 34));
-    round_rect(g, {.5f, .5f, 459, 509}, Color(255, 27, 32, 34), Color(255, 62, 73, 73));
+    round_rect(g, {.5f, .5f, 459, 557}, Color(255, 27, 32, 34), Color(255, 62, 73, 73));
     text(g, L"Settings", {20, 14, 295, 28}, 20, Color(255, 240, 243, 237), FontStyleBold);
     RectF def{330, 20, 70, 29};
-    round_rect(g, def, hover == 6 ? Color(255, 52, 62, 63) : Color(255, 37, 45, 46));
-    text(g, L"Default", def, 11, Color(255, 225, 235, 228), FontStyleRegular, true);
+    if (tab == 0) {
+        round_rect(g, def, hover == 6 ? Color(255, 52, 62, 63) : Color(255, 37, 45, 46));
+        text(g, L"Default", def, 11, Color(255, 225, 235, 228), FontStyleRegular, true);
+    }
     RectF close{410, 10, 38, 36};
     round_rect(g, close, hover == 7 ? Color(255, 52, 62, 63) : Color(255, 27, 32, 34));
     Pen xpen(Color(255, 220, 232, 225), 1.7f);
@@ -293,6 +458,26 @@ void SettingsWindow::paint(HDC dc) {
     xpen.SetEndCap(LineCapRound);
     g.DrawLine(&xpen, 423, 21, 435, 33);
     g.DrawLine(&xpen, 435, 21, 423, 33);
+    for (int i = 0; i < 2; ++i) {
+        RectF r{20.0f + i * 215, 51, 205, 32};
+        bool selected = tab == i;
+        round_rect(g, r,
+                   selected          ? ui_color(current_theme().soft)
+                   : hover == 20 + i ? Color(255, 52, 62, 63)
+                                     : Color(255, 37, 45, 46),
+                   selected ? ui_color(current_theme().border) : Color(0, 0, 0, 0));
+        text(g, i ? L"Record" : L"General", r, 12, Color(255, 230, 236, 230), FontStyleRegular,
+             true);
+        if (window && GetFocus() == window && focus == 20 + i) {
+            Pen p(ui_color(current_theme().focus), 1);
+            g.DrawRectangle(&p, r.X + 2, r.Y + 2, r.Width - 4, r.Height - 4);
+        }
+    }
+    if (tab == 1) {
+        paint_record(g);
+        return;
+    }
+    g.TranslateTransform(0, 48);
     text(g, L"Capture trigger", {20, 43, 300, 20}, 12, Color(255, 166, 180, 176));
     for (int i = 0; i < 2; ++i) {
         RectF r{20.0f + i * 215, 63, 205, 32};
@@ -331,8 +516,8 @@ void SettingsWindow::paint(HDC dc) {
     text(g, L"Launch at Windows startup", {20, 208, 310, 24}, 13, Color(255, 233, 239, 232),
          FontStyleBold);
     const wchar_t* status =
-        startup_state == StartupState::On      ? L"On  •  starts quietly in the tray"
-        : startup_state == StartupState::Off   ? L"Off  •  starts quietly if enabled"
+        startup_state == StartupState::On      ? L"On  РІР‚Сћ  starts quietly in the tray"
+        : startup_state == StartupState::Off   ? L"Off  РІР‚Сћ  starts quietly if enabled"
         : startup_state == StartupState::Other ? L"Click to enable startup for this app"
                                                : L"Windows startup settings unavailable";
     text(g, status, {20, 230, 330, 20}, 10, Color(255, 166, 180, 176));
@@ -406,6 +591,8 @@ void SettingsWindow::paint(HDC dc) {
                      {338, 319, 102, 34},
                      {335, 478, 105, 24},
                      {20, 253, 420, 38}};
+        if (focus == 6 || focus == 7)
+            r[focus].Y -= 48;
         Pen p(ui_color(current_theme().focus), 1);
         g.DrawRectangle(&p, r[focus].X + 2, r[focus].Y + 2, r[focus].Width - 4,
                         r[focus].Height - 4);
@@ -532,7 +719,7 @@ LRESULT SettingsWindow::message(UINT m, WPARAM w, LPARAM l) {
             return TRUE;
         break;
     case WM_BIND_KEY:
-        if (kind == TriggerKind::Keyboard && focus == 2) {
+        if (tab == 0 && kind == TriggerKind::Keyboard && focus == 2) {
             keyboard = {TriggerKind::Keyboard, static_cast<UINT>(w), static_cast<UINT>(l)};
             refresh_conflict();
             InvalidateRect(window, nullptr, FALSE);
@@ -541,19 +728,26 @@ LRESULT SettingsWindow::message(UINT m, WPARAM w, LPARAM l) {
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN: {
         UINT held = held_modifiers();
+        if ((w == VK_LEFT || w == VK_RIGHT) && (focus == 20 || focus == 21) && !held) {
+            choose(focus == 20 ? 21 : 20);
+            return 0;
+        }
         if (w == VK_ESCAPE && !held) {
             PostMessageW(window, WM_CLOSE, 0, 0);
             return 0;
         }
         if (w == VK_TAB && !(held & (MOD_CONTROL | MOD_ALT | MOD_WIN))) {
-            const int order[] = {0, 1, 2, 3, 13, 8, 9, 10, 11, 12, 4, 5, 6, 7};
+            const int general_order[] = {20, 21, 0, 1, 2, 3, 13, 8, 9, 10, 11, 12, 4, 5, 6, 7};
+            const int record_order[] = {20, 21, 30, 31, 32, 33, 34, 35, 36, 37, 38, 5, 7};
+            const int* order = tab == 0 ? general_order : record_order;
+            int count = tab == 0 ? 16 : 13;
             int pos = 0;
-            while (pos < 14 && order[pos] != focus)
+            while (pos < count && order[pos] != focus)
                 ++pos;
-            if (pos == 14)
+            if (pos == count)
                 pos = 0;
             int step = (held & MOD_SHIFT) ? -1 : 1;
-            focus = order[(pos + 14 + step) % 14];
+            focus = order[(pos + count + step) % count];
             sync_capture();
             InvalidateRect(window, nullptr, FALSE);
             return 0;
@@ -592,6 +786,8 @@ HWND show_settings(HWND owner, const Trigger& current, StartupStore& startup,
         s->mouse = current;
     s->startup = &startup;
     s->actions = std::move(actions);
+    if (s->actions.config_path)
+        s->recording = load_record_options(s->actions.config_path());
     s->notice = s->actions.initial_notice;
     s->start_minimized = start_minimized;
     s->startup_state = startup.query();
@@ -606,7 +802,7 @@ HWND show_settings(HWND owner, const Trigger& current, StartupStore& startup,
     HWND h = CreateWindowExW(
         WS_EX_TOOLWINDOW | WS_EX_TOPMOST, wc.lpszClassName,
         s->conflict ? L"Drawscr settings - Print Screen in use" : L"Drawscr settings", WS_POPUP, 0,
-        0, sx(460, s->dpi), sx(510, s->dpi), owner, nullptr, wc.hInstance, s.get());
+        0, sx(460, s->dpi), sx(558, s->dpi), owner, nullptr, wc.hInstance, s.get());
     if (!h)
         return nullptr;
     SettingsWindow* state = s.release();
@@ -615,7 +811,7 @@ HWND show_settings(HWND owner, const Trigger& current, StartupStore& startup,
     GetWindowRect(owner, &anchor);
     MONITORINFO mi{sizeof(mi)};
     GetMonitorInfoW(MonitorFromRect(&anchor, MONITOR_DEFAULTTONEAREST), &mi);
-    int width = sx(460, state->dpi), height = sx(510, state->dpi),
+    int width = sx(460, state->dpi), height = sx(558, state->dpi),
         x = mi.rcWork.left + (mi.rcWork.right - mi.rcWork.left - width) / 2,
         y = mi.rcWork.top + (mi.rcWork.bottom - mi.rcWork.top - height) / 2;
     SetWindowPos(h, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE);
@@ -623,31 +819,7 @@ HWND show_settings(HWND owner, const Trigger& current, StartupStore& startup,
     if (!SetWindowRgn(h, region, TRUE))
         DeleteObject(region);
     SetWindowDisplayAffinity(h, 0x11);
-    if (state->tips.create(h)) {
-        state->config_tip = state->actions.config_path ? state->actions.config_path() : L"";
-        state->tips.add(15, {20, 433, 440, 468}, state->config_tip.c_str(), state->dpi);
-        const RECT rects[] = {{20, 63, 225, 95},    {235, 63, 440, 95},   {20, 105, 440, 149},
-                              {20, 205, 440, 249},  {20, 390, 225, 426},  {235, 390, 440, 426},
-                              {330, 20, 400, 49},   {410, 10, 448, 46},   {20, 319, 122, 353},
-                              {126, 319, 228, 353}, {232, 319, 334, 353}, {338, 319, 440, 353},
-                              {335, 478, 440, 502}, {20, 253, 440, 291}};
-        const wchar_t* help[] = {L"Choose a keyboard shortcut",
-                                 L"Choose a mouse shortcut",
-                                 L"Press the keys or mouse button for capture",
-                                 L"Toggle launch at Windows startup",
-                                 L"Save the capture trigger",
-                                 L"Close settings",
-                                 L"Restore Print Screen as the default",
-                                 L"Close settings",
-                                 L"Use the mint theme",
-                                 L"Use the sky blue theme",
-                                 L"Use the amber theme",
-                                 L"Use the violet theme",
-                                 L"Open dzrobo.com in your browser",
-                                 L"Start normal launches minimized to the tray"};
-        for (UINT i = 0; i < 14; ++i)
-            state->tips.add(i + 1, rects[i], help[i], state->dpi);
-    }
+    state->sync_tips();
     ShowWindow(h, SW_SHOW);
     SetForegroundWindow(h);
     SetFocus(h);
